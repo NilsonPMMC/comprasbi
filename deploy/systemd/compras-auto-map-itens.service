@@ -1,0 +1,20 @@
+[Unit]
+Description=Compras BI — mapeamento contínuo (auto_map_itens)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/var/www/compras
+# Ajuste o usuário ao dono do projeto / permissões do .env
+User=www-data
+Group=www-data
+EnvironmentFile=-/var/www/compras/.env
+ExecStart=/bin/bash /var/www/compras/scripts/auto_map_itens_daemon.sh
+Restart=always
+RestartSec=45
+StandardOutput=append:/var/www/compras/logs/auto_map_systemd.log
+StandardError=append:/var/www/compras/logs/auto_map_systemd.log
+
+[Install]
+WantedBy=multi-user.target

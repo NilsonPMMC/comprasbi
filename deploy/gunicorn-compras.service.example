@@ -1,0 +1,28 @@
+# Exemplo systemd — copie para /etc/systemd/system/gunicorn-compras.service
+# e ajuste User/Group e caminhos.
+#
+# sudo systemctl daemon-reload
+# sudo systemctl enable --now gunicorn-compras
+
+[Unit]
+Description=Gunicorn — API Compras (Django)
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/compras
+EnvironmentFile=/var/www/compras/.env
+ExecStart=/var/www/compras/.venv/bin/gunicorn \
+    -c /var/www/compras/deploy/gunicorn.comprasbi.py \
+    core.wsgi:application
+ExecReload=/bin/kill -s HUP $MAINPID
+KillMode=mixed
+TimeoutStopSec=30
+PrivateTmp=true
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
