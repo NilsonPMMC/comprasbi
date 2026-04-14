@@ -48,13 +48,30 @@ export function getHistoricoPrecos(catalogoId) {
  * @param {number|string} ano
  * @param {number} [pagina=1]
  * @param {number} [tamanhoPagina=200]
+ * @param {string} [numeroCompra='']
+ * @param {number|string} [modalidadeId='']
+ * @param {'sequencial'|'numero_compra'} [ordenarPor='sequencial']
+ * @param {'asc'|'desc'} [ordem='asc']
  * @returns {Promise<import('axios').AxiosResponse>}
  */
-export function getComprasPorAno(ano, pagina = 1, tamanhoPagina = 200) {
+export function getComprasPorAno(
+  ano,
+  pagina = 1,
+  tamanhoPagina = 200,
+  numeroCompra = '',
+  modalidadeId = '',
+  ordenarPor = 'sequencial',
+  ordem = 'asc',
+) {
+  const modalidade = String(modalidadeId ?? '').trim()
   return api.get(`/compras/${ano}`, {
     params: {
       pagina,
       tamanho_pagina: tamanhoPagina,
+      numero_compra: numeroCompra,
+      modalidade_id: modalidade,
+      ordenar_por: ordenarPor,
+      ordem,
     },
   })
 }

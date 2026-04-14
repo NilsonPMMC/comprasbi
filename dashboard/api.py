@@ -24,6 +24,7 @@ class CompraOut(Schema):
     orgao_cnpj: str
     ano: int
     sequencial: int
+    numero_compra: str
     modalidade_id: int
     modalidade_nome: str
     data_publicacao: str | None
@@ -142,6 +143,10 @@ def compras_por_ano(
     ano: int,
     pagina: int = 1,
     tamanho_pagina: int = 50,
+    numero_compra: str = "",
+    modalidade_id: int | None = None,
+    ordenar_por: str = "sequencial",
+    ordem: str = "asc",
 ) -> CompraListResponse:
     """Retorna compras do cache local (tabela Compra)."""
     pagina_efetiva = max(1, pagina)
@@ -149,7 +154,20 @@ def compras_por_ano(
     inicio = (pagina_efetiva - 1) * tamanho_efetivo
     fim = inicio + tamanho_efetivo
 
-    queryset = Compra.objects.filter(ano=ano).order_by("sequencial")
+    queryset = Compra.objects.filter(ano=ano)
+    numero_compra_limpo = numero_compra.strip()
+    if numero_compra_limpo:
+        queryset = queryset.filter(numero_compra__icontains=numero_compra_limpo)
+    if modalidade_id is not None:
+        queryset = queryset.filter(modalidade_id=modalidade_id)
+
+    campo_ordenacao = "sequencial"
+    if ordenar_por == "numero_compra":
+        campo_ordenacao = "numero_compra"
+    ordem_desc = ordem.lower() == "desc"
+    if ordem_desc:
+        campo_ordenacao = f"-{campo_ordenacao}"
+    queryset = queryset.order_by(campo_ordenacao, "sequencial")
     total = queryset.count()
     registros = [
         CompraOut(
@@ -157,6 +175,7 @@ def compras_por_ano(
             orgao_cnpj=compra.orgao_cnpj,
             ano=compra.ano,
             sequencial=compra.sequencial,
+            numero_compra=compra.numero_compra or "",
             modalidade_id=compra.modalidade_id,
             modalidade_nome=compra.modalidade_nome,
             data_publicacao=compra.data_publicacao.isoformat() if compra.data_publicacao else None,

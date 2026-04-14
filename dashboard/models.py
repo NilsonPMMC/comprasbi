@@ -54,6 +54,7 @@ class Compra(models.Model):
     orgao_cnpj = models.CharField(max_length=14, db_index=True)
     ano = models.IntegerField(db_index=True)
     sequencial = models.IntegerField()
+    numero_compra = models.CharField(max_length=64, blank=True, default="", db_index=True)
     modalidade_id = models.IntegerField()
     modalidade_nome = models.CharField(max_length=120, blank=True, default="")
     data_publicacao = models.DateField(null=True, blank=True)

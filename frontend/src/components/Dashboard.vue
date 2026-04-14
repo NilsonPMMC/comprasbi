@@ -56,6 +56,9 @@ const anoCompra = ref(String(new Date().getFullYear()))
 const comprasAno = ref([])
 const compraSelecionada = ref('')
 const buscaCompra = ref('')
+const filtroNumeroCompra = ref('')
+const filtroModalidade = ref('')
+const ordenarComprasPor = ref('numero_compra')
 const itensCompraBruto = ref([])
 const carregandoCompras = ref(false)
 const carregandoItensCompra = ref(false)
@@ -75,6 +78,9 @@ const carregandoHistoricoItemMatriz = ref(false)
 const modoEvolucaoMatriz = ref('semantica')
 const mostrarLogoPrefeitura = ref(true)
 const exportandoRelatorioCompra = ref(false)
+const exportandoRelatorioMatriz = ref(false)
+const modoRelatorioCompra = ref('semantica_master')
+const modoRelatorioMatriz = ref('semantica')
 
 // ---------------------------------------------------------------------------
 // Formatação e parsing (valores monetários da API em string pt/en)
@@ -127,7 +133,11 @@ function truncarTexto(texto, limite = 110) {
 function rotuloCompra(c) {
   const data = formatarData(c.data_publicacao)
   const objeto = truncarTexto(c.objeto || 'Sem objeto')
-  return `${c.ano}/${c.sequencial} · ${data} · ${objeto}`
+  const numeroCompra = String(c.numero_compra || '').trim()
+  const sufixoNumero = numeroCompra ? ` · Pregão ${numeroCompra}` : ''
+  const modalidade = String(c.modalidade_nome || '').trim()
+  const sufixoModalidade = modalidade ? ` · ${modalidade}` : ''
+  return `${c.ano}/${c.sequencial}${sufixoNumero}${sufixoModalidade} · ${data} · ${objeto}`
 }
 
 function formatarProcessoData(ano, sequencial, data) {
@@ -215,7 +225,9 @@ function normalizarBusca(s) {
 }
 
 function termoBuscaCompra(c) {
-  return normalizarBusca(`${c.ano}/${c.sequencial} ${c.objeto || ''} ${formatarData(c.data_publicacao)}`)
+  return normalizarBusca(
+    `${c.ano}/${c.sequencial} ${c.numero_compra || ''} ${c.modalidade_nome || ''} ${c.objeto || ''} ${formatarData(c.data_publicacao)}`,
+  )
 }
 
 const produtoSelecionadoObj = computed(() => {
@@ -302,6 +314,21 @@ const comprasAnoFiltradas = computed(() => {
   const q = normalizarBusca(buscaCompra.value)
   if (!q) return comprasAno.value
   return comprasAno.value.filter((c) => termoBuscaCompra(c).includes(q))
+})
+
+const modalidadesCompraDisponiveis = computed(() => {
+  const map = new Map()
+  for (const c of comprasAno.value) {
+    const id = Number(c.modalidade_id)
+    if (!Number.isFinite(id)) continue
+    if (!map.has(id)) {
+      map.set(id, {
+        id,
+        nome: String(c.modalidade_nome || `Modalidade ${id}`),
+      })
+    }
+  }
+  return [...map.values()].sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'))
 })
 
 const resumoCompraSelecionada = computed(() => {
@@ -499,12 +526,23 @@ async function carregarComprasAno() {
 
   carregandoCompras.value = true
   try {
+    const numeroCompra = String(filtroNumeroCompra.value || '').trim()
+    const modalidadeId = String(filtroModalidade.value || '').trim()
+    const ordenarPor = ordenarComprasPor.value === 'numero_compra' ? 'numero_compra' : 'sequencial'
     const pageSize = 200
     let pagina = 1
     let todos = []
     let totalRegistros = 0
     while (pagina <= 50) {
-      const { data } = await getComprasPorAno(ano, pagina, pageSize)
+      const { data } = await getComprasPorAno(
+        ano,
+        pagina,
+        pageSize,
+        numeroCompra,
+        modalidadeId,
+        ordenarPor,
+        'asc',
+      )
       const lista = Array.isArray(data?.data) ? data.data : []
       totalRegistros = Number(data?.totalRegistros || 0)
       todos = todos.concat(lista)
@@ -527,6 +565,16 @@ async function carregarComprasAno() {
   } finally {
     carregandoCompras.value = false
   }
+}
+
+async function aplicarFiltroNumeroCompra() {
+  await carregarComprasAno()
+}
+
+async function limparFiltroNumeroCompra() {
+  filtroNumeroCompra.value = ''
+  filtroModalidade.value = ''
+  await carregarComprasAno()
 }
 
 async function buscarItensCompra() {
@@ -640,9 +688,46 @@ function toggleSelecionarTodosMatriz(event) {
   selecionadosMatriz.value = []
 }
 
-function exportarRelatorioMatrizSelecionados() {
+async function montarLinhasRelatorioMatrizSelecionados() {
+  if (matrizSelecionadosRows.value.length === 0) return []
+
+  if (isModoSemantica(modoRelatorioMatriz.value)) {
+    return matrizSelecionadosRows.value.map((r) => ({ ...r }))
+  }
+
+  const linhas = await Promise.all(
+    matrizSelecionadosRows.value.map(async (r) => {
+      try {
+        const { data } = await getHistoricoPrecos(r.catalogo_id)
+        const rows = deduplicarHistoricoPorProcesso(Array.isArray(data) ? data : [])
+        const cons = consolidarHistoricoMatrizLike(rows)
+        return {
+          catalogo_id: r.catalogo_id,
+          descricao: r.descricao,
+          ...cons,
+        }
+      } catch (e) {
+        console.error(e)
+        return {
+          catalogo_id: r.catalogo_id,
+          descricao: r.descricao,
+          ...consolidadoPrecosVazio(),
+        }
+      }
+    }),
+  )
+
+  return linhas
+}
+
+async function exportarRelatorioMatrizSelecionados() {
   if (matrizSelecionadosRows.value.length === 0) return
+  exportandoRelatorioMatriz.value = true
+  try {
+    const linhas = await montarLinhasRelatorioMatrizSelecionados()
+    if (linhas.length === 0) return
   const header = [
+    'modo_analise',
     'item',
     'descricao',
     'maior_valor',
@@ -652,7 +737,9 @@ function exportarRelatorioMatrizSelecionados() {
     'ultimo_valor',
     'ultimo_processo_data',
   ]
-  const rows = matrizSelecionadosRows.value.map((r) => [
+  const modoTxt = isModoSemantica(modoRelatorioMatriz.value) ? 'semantica' : 'id_exata'
+  const rows = linhas.map((r) => [
+    modoTxt,
     r.catalogo_id,
     `"${String(r.descricao || '').replace(/"/g, '""')}"`,
     r.maior_valor ?? '',
@@ -667,9 +754,12 @@ function exportarRelatorioMatrizSelecionados() {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `relatorio_matriz_itens_${new Date().toISOString().slice(0, 10)}.csv`
+  a.download = nomeArquivoRelatorioMatriz('csv')
   a.click()
   URL.revokeObjectURL(url)
+  } finally {
+    exportandoRelatorioMatriz.value = false
+  }
 }
 
 function carregarImagemComoDataURL(src) {
@@ -737,14 +827,20 @@ function didDrawPageRodapePMC(doc) {
 
 async function exportarRelatorioMatrizSelecionadosPDF() {
   if (matrizSelecionadosRows.value.length === 0) return
-
+  exportandoRelatorioMatriz.value = true
+  try {
+  const linhas = await montarLinhasRelatorioMatrizSelecionados()
+  if (linhas.length === 0) return
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' })
   const dataAtual = new Date().toLocaleString('pt-BR')
   const titulo = 'Relatório Comparativo de Preços'
-  const subtitulo = `Gerado em: ${dataAtual}`
+  const modoTxt = isModoSemantica(modoRelatorioMatriz.value)
+    ? 'Identificação semântica (consolidado)'
+    : 'ID exata (uma linha por compra/processo)'
+  const subtitulo = `Modo: ${modoTxt} · Gerado em: ${dataAtual}`
   await aplicarCabecalhoInstitucionalPDF(doc, titulo, subtitulo)
 
-  const body = matrizSelecionadosRows.value.map((r) => [
+  const body = linhas.map((r) => [
     String(r.catalogo_id),
     truncarTexto(r.descricao, 72),
     `${formatarMoeda(parseMoney(r.maior_valor))}\n${formatarProcessoData(r.maior_ano, r.maior_sequencial, r.maior_data_publicacao)}`,
@@ -768,16 +864,19 @@ async function exportarRelatorioMatrizSelecionadosPDF() {
     didDrawPage: () => didDrawPageRodapePMC(doc),
   })
 
-  doc.save(`relatorio_matriz_itens_${new Date().toISOString().slice(0, 10)}.pdf`)
+  doc.save(nomeArquivoRelatorioMatriz('pdf'))
+  } finally {
+    exportandoRelatorioMatriz.value = false
+  }
 }
 
 async function montarLinhasRelatorioCompra() {
   const compra = compraSelecionadaObj.value
-  if (!compra || itensCompraBruto.value.length === 0) return []
+  if (!compra || itensCompraTabela.value.length === 0) return []
 
   const idsCatalogo = [
     ...new Set(
-      itensCompraBruto.value.map((i) => i.produto_master_id).filter((id) => id != null),
+      itensCompraTabela.value.map((i) => i.produtoMasterId).filter((id) => id != null),
     ),
   ]
 
@@ -786,7 +885,10 @@ async function montarLinhasRelatorioCompra() {
     idsCatalogo.map(async (catalogoId) => {
       try {
         const { data } = await getHistoricoPrecos(catalogoId)
-        const rows = Array.isArray(data) ? data : []
+        const rowsBrutas = Array.isArray(data) ? data : []
+        const rows = modoRelatorioCompra.value === 'semantica_master'
+          ? rowsBrutas
+          : deduplicarHistoricoPorProcesso(rowsBrutas)
         cache.set(catalogoId, consolidarHistoricoMatrizLike(rows))
       } catch (e) {
         console.error(e)
@@ -795,19 +897,46 @@ async function montarLinhasRelatorioCompra() {
     }),
   )
 
-  const ordenados = [...itensCompraBruto.value].sort((a, b) => a.numero_item - b.numero_item)
-
-  return ordenados.map((item) => {
+  return itensCompraTabela.value.map((item) => {
     const cons =
-      item.produto_master_id != null
-        ? cache.get(item.produto_master_id) ?? consolidadoPrecosVazio()
+      item.produtoMasterId != null
+        ? cache.get(item.produtoMasterId) ?? consolidadoPrecosVazio()
         : consolidadoPrecosVazio()
     return {
-      numero_item: item.numero_item,
+      numero_item: item.numeroItem,
       descricao: item.descricao || '',
       ...cons,
     }
   })
+}
+
+function slugNomeArquivo(value) {
+  return String(value ?? '')
+    .trim()
+    .replace(/\s+/g, '-')
+    .replace(/[^a-zA-Z0-9_-]/g, '')
+}
+
+function nomeArquivoRelatorioCompra(compra, extensao) {
+  const data = new Date().toISOString().slice(0, 10)
+  const tokens = [`relatorio_compra_${compra.ano}_${compra.sequencial}`]
+  const modo = modoRelatorioCompra.value === 'semantica_master' ? 'semantica' : 'id-exata'
+  tokens.push(`modo-${modo}`)
+
+  const numeroCompra = slugNomeArquivo(compra.numero_compra)
+  if (numeroCompra) tokens.push(`pregao-${numeroCompra}`)
+
+  const filtroPregao = slugNomeArquivo(filtroNumeroCompra.value)
+  if (filtroPregao) tokens.push(`filtro-${filtroPregao}`)
+
+  tokens.push(data)
+  return `${tokens.join('_')}.${extensao}`
+}
+
+function nomeArquivoRelatorioMatriz(extensao) {
+  const data = new Date().toISOString().slice(0, 10)
+  const modo = isModoSemantica(modoRelatorioMatriz.value) ? 'semantica' : 'id-exata'
+  return `relatorio_matriz_itens_modo-${modo}_${data}.${extensao}`
 }
 
 async function exportarRelatorioCompraCSV() {
@@ -818,8 +947,19 @@ async function exportarRelatorioCompraCSV() {
   try {
     const linhas = await montarLinhasRelatorioCompra()
     if (linhas.length === 0) return
+    const modoTxt = modoRelatorioCompra.value === 'semantica_master' ? 'semantica' : 'id_exata'
+    const filtroNumeroCompraAplicado = String(filtroNumeroCompra.value || '').trim()
+    const ordenacaoAtual = ordenarComprasPor.value === 'numero_compra'
+      ? 'numero_compra'
+      : 'sequencial'
 
     const header = [
+      'compra_ano',
+      'compra_sequencial',
+      'compra_numero',
+      'modo_analise',
+      'filtro_numero_compra',
+      'ordenacao_compras',
       'item',
       'descricao',
       'maior_valor',
@@ -830,6 +970,12 @@ async function exportarRelatorioCompraCSV() {
       'ultimo_processo_data',
     ]
     const rows = linhas.map((r) => [
+      compra.ano,
+      compra.sequencial,
+      compra.numero_compra || '',
+      modoTxt,
+      filtroNumeroCompraAplicado,
+      ordenacaoAtual,
       r.numero_item,
       `"${String(r.descricao || '').replace(/"/g, '""')}"`,
       r.maior_valor ?? '',
@@ -844,7 +990,7 @@ async function exportarRelatorioCompraCSV() {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `relatorio_compra_${compra.ano}_${compra.sequencial}_${new Date().toISOString().slice(0, 10)}.csv`
+    a.download = nomeArquivoRelatorioCompra(compra, 'csv')
     a.click()
     URL.revokeObjectURL(url)
   } finally {
@@ -864,7 +1010,16 @@ async function exportarRelatorioCompraPDF() {
     const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' })
     const dataAtual = new Date().toLocaleString('pt-BR')
     const titulo = 'Relatório de Itens da Compra'
-    const subtitulo = `Compra ${compra.ano}/${compra.sequencial} · Gerado em: ${dataAtual}`
+    const numeroCompraTxt = compra.numero_compra ? ` · Pregão ${compra.numero_compra}` : ''
+    const filtroNumeroCompraAplicado = String(filtroNumeroCompra.value || '').trim()
+    const filtroTxt = filtroNumeroCompraAplicado ? ` · Filtro número compra: ${filtroNumeroCompraAplicado}` : ''
+    const ordenacaoTxt = ordenarComprasPor.value === 'numero_compra'
+      ? 'número do pregão'
+      : 'sequencial PNCP'
+    const modoTxt = modoRelatorioCompra.value === 'semantica_master'
+      ? 'Identificação semântica (consolidado)'
+      : 'ID exata (uma linha por compra/processo)'
+    const subtitulo = `Compra ${compra.ano}/${compra.sequencial}${numeroCompraTxt} · Modo: ${modoTxt} · Ordenação: ${ordenacaoTxt}${filtroTxt} · Gerado em: ${dataAtual}`
     await aplicarCabecalhoInstitucionalPDF(doc, titulo, subtitulo)
 
     const body = linhas.map((r) => [
@@ -891,7 +1046,7 @@ async function exportarRelatorioCompraPDF() {
       didDrawPage: () => didDrawPageRodapePMC(doc),
     })
 
-    doc.save(`relatorio_compra_${compra.ano}_${compra.sequencial}_${new Date().toISOString().slice(0, 10)}.pdf`)
+    doc.save(nomeArquivoRelatorioCompra(compra, 'pdf'))
   } finally {
     exportandoRelatorioCompra.value = false
   }
@@ -1522,7 +1677,7 @@ function formatarEconomiaPct(pct) {
           </p>
         </div>
 
-        <div class="grid grid-cols-1 gap-3 md:grid-cols-[140px_1fr]">
+        <div class="mb-3 grid grid-cols-1 gap-3 md:grid-cols-[140px_minmax(220px,1fr)_220px_220px_auto] md:items-end">
           <label class="block text-xs font-semibold uppercase tracking-wide text-slate-600">
             Ano
             <input
@@ -1533,6 +1688,67 @@ function formatarEconomiaPct(pct) {
               class="mt-1 block w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-1"
             >
           </label>
+          <label class="block text-xs font-semibold uppercase tracking-wide text-slate-600">
+            Número Compra (ERP/PNCP)
+            <input
+              v-model="filtroNumeroCompra"
+              type="search"
+              placeholder="Ex.: 179"
+              class="mt-1 block w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-1"
+              :disabled="carregandoCompras"
+              @keyup.enter="aplicarFiltroNumeroCompra"
+            >
+          </label>
+          <label class="block text-xs font-semibold uppercase tracking-wide text-slate-600">
+            Modalidade (opcional)
+            <select
+              v-model="filtroModalidade"
+              class="mt-1 block w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-1"
+              :disabled="carregandoCompras"
+            >
+              <option value="">Todas</option>
+              <option
+                v-for="m in modalidadesCompraDisponiveis"
+                :key="`modalidade-${m.id}`"
+                :value="String(m.id)"
+              >
+                {{ m.nome }}
+              </option>
+            </select>
+          </label>
+          <label class="block text-xs font-semibold uppercase tracking-wide text-slate-600">
+            Ordenação da lista de compras
+            <select
+              v-model="ordenarComprasPor"
+              class="mt-1 block w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-1"
+              :disabled="carregandoCompras"
+              @change="carregarComprasAno"
+            >
+              <option value="numero_compra">Número Compra</option>
+              <option value="sequencial">Sequencial PNCP</option>
+            </select>
+          </label>
+          <div class="flex gap-2">
+            <button
+              type="button"
+              class="rounded border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+              :disabled="carregandoCompras"
+              @click="aplicarFiltroNumeroCompra"
+            >
+              Aplicar filtro
+            </button>
+            <button
+              type="button"
+              class="rounded border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+              :disabled="carregandoCompras || (!filtroNumeroCompra && !filtroModalidade)"
+              @click="limparFiltroNumeroCompra"
+            >
+              Limpar filtro
+            </button>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 gap-3 md:grid-cols-[1fr]">
           <label class="block text-xs font-semibold uppercase tracking-wide text-slate-600">
             Compra
             <input
@@ -1592,6 +1808,17 @@ function formatarEconomiaPct(pct) {
             v-if="compraSelecionada && !carregandoItensCompra && itensCompraTabela.length > 0"
             class="flex flex-wrap gap-2"
           >
+            <label class="text-xs font-semibold uppercase tracking-wide text-slate-600">
+              Modo relatório
+              <select
+                v-model="modoRelatorioCompra"
+                class="ml-2 rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-1 sm:text-sm"
+                :disabled="exportandoRelatorioCompra"
+              >
+                <option value="semantica_master">Identificação semântica (consolidado)</option>
+                <option value="id_exata_item">ID exata (uma linha por compra/processo)</option>
+              </select>
+            </label>
             <button
               type="button"
               class="rounded border border-blue-700 bg-blue-700 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-blue-800 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-60 sm:text-sm"
@@ -1814,6 +2041,17 @@ function formatarEconomiaPct(pct) {
                 class="mt-1 block w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-1"
               >
             </label>
+            <label class="block text-xs font-semibold uppercase tracking-wide text-slate-600">
+              Modo relatório
+              <select
+                v-model="modoRelatorioMatriz"
+                class="mt-1 block w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-1"
+                :disabled="exportandoRelatorioMatriz"
+              >
+                <option value="semantica">Identificação semântica (consolidado)</option>
+                <option value="id_exata">ID exata (uma linha por compra/processo)</option>
+              </select>
+            </label>
             <button
               type="button"
               class="rounded border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-1"
@@ -1825,7 +2063,7 @@ function formatarEconomiaPct(pct) {
             <button
               type="button"
               class="rounded border border-blue-700 bg-blue-700 px-3 py-2 text-sm text-white shadow-sm hover:bg-blue-800 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-60"
-              :disabled="matrizSelecionadosRows.length === 0"
+              :disabled="matrizSelecionadosRows.length === 0 || exportandoRelatorioMatriz"
               @click="exportarRelatorioMatrizSelecionados"
             >
               Relatório CSV ({{ matrizSelecionadosRows.length }})
@@ -1833,7 +2071,7 @@ function formatarEconomiaPct(pct) {
             <button
               type="button"
               class="rounded border border-slate-700 bg-slate-700 px-3 py-2 text-sm text-white shadow-sm hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-700 focus:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-60"
-              :disabled="matrizSelecionadosRows.length === 0"
+              :disabled="matrizSelecionadosRows.length === 0 || exportandoRelatorioMatriz"
               @click="exportarRelatorioMatrizSelecionadosPDF"
             >
               Relatório PDF

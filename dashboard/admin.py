@@ -146,12 +146,13 @@ class CompraAdmin(admin.ModelAdmin):
         "orgao_cnpj",
         "ano",
         "sequencial",
+        "numero_compra",
         "data_publicacao",
         "modalidade_nome",
         "valor_total_estimado",
     )
     list_filter = ("ano", "modalidade_id")
-    search_fields = ("pncp_id", "orgao_cnpj", "objeto")
+    search_fields = ("pncp_id", "orgao_cnpj", "numero_compra", "objeto")
     ordering = ("-ano", "-sequencial")
     date_hierarchy = "data_publicacao"
 

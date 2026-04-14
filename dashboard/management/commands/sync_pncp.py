@@ -179,6 +179,7 @@ class Command(BaseCommand):
                 "orgao_cnpj": cnpj,
                 "ano": int(payload.get("anoCompra") or ano),
                 "sequencial": int(payload.get("sequencialCompra") or sequencial),
+                "numero_compra": str(payload.get("numeroCompra") or "").strip(),
                 "modalidade_id": int(payload.get("modalidadeId") or 0),
                 "modalidade_nome": str(payload.get("modalidadeNome") or ""),
                 "data_publicacao": self._to_date(payload.get("dataPublicacaoPncp")),

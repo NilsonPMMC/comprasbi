@@ -175,13 +175,30 @@ python manage.py auto_map_itens --limit 100
 | Método | Caminho | Descrição |
 |--------|---------|-----------|
 | GET | `/api/health` | Saúde do serviço |
-| GET | `/api/compras/{ano}` | Compras em cache (paginação) |
+| GET | `/api/compras/{ano}` | Compras em cache (paginação). Query params: `numero_compra`, `modalidade_id`, `ordenar_por` (`sequencial`/`numero_compra`) e `ordem` (`asc`/`desc`) |
 | GET | `/api/compras/{ano}/{sequencial}/itens` | Itens da compra |
 | GET | `/api/catalogo` | Catálogo master |
 | GET | `/api/catalogo/matriz` | Matriz consolidada (maior/menor/último) |
 | GET | `/api/catalogo/{id}/historico-precos` | Histórico de preços homologados |
 | POST | `/api/catalogo` | Cria item no catálogo master |
 | POST | `/api/itens/{item_id}/vincular` | Vincula item ao catálogo |
+
+## Endpoints externos do PNCP utilizados
+
+Os comandos de sincronização (`sync_pncp`) e o cliente PNCP usam estes endpoints oficiais:
+
+| Método | Endpoint PNCP | Uso no projeto |
+|--------|----------------|----------------|
+| GET | `https://pncp.gov.br/api/consulta/v1/orgaos/{cnpj}/compras/{ano}/{sequencial}` | Consulta da compra por varredura sequencial (`sync_pncp`) |
+| GET | `https://pncp.gov.br/api/pncp/v1/orgaos/{cnpj}/compras/{ano}/{sequencial}/itens?pagina={n}&tamanhoPagina={m}` | Paginação dos itens da compra (`sync_pncp`) |
+| GET | `https://pncp.gov.br/api/pncp/v1/orgaos/{cnpj}/compras/{ano}/{sequencial}/itens/{numero_item}/resultados?pagina=1&tamanhoPagina=10` | Resultado/homologação do item (`sync_pncp`) |
+| GET | `https://pncp.gov.br/api/consulta/v1/contratacoes/publicacao?cnpjOrgao={cnpj}&dataInicial={yyyymmdd}&dataFinal={yyyymmdd}&pagina={n}&tamanhoPagina={m}&codigoModalidadeContratacao={modalidade}` | Listagem anual pública por modalidade (`dashboard/services/pncp_client.py`) |
+
+Observação: o CNPJ padrão do órgão é configurável via `PNCP_CNPJ_ORGAO` (padrão: `46523270000188`).
+Observação 2: o campo `numeroCompra` retornado no endpoint de detalhe da compra (`/consulta/v1/orgaos/.../compras/{ano}/{sequencial}`) agora é persistido em `Compra.numero_compra` e exposto no endpoint interno `GET /api/compras/{ano}` para cruzamento ERP ↔ PNCP (ex.: compra `2025/663` → pregão `179`).
+Observação 3: os relatórios CSV/PDF do Painel Compras passam a carregar também o contexto aplicado na tela (Número Compra da compra, filtro por Número Compra e ordenação da lista de compras).
+Observação 4: os relatórios CSV/PDF de Painel Compras e Matriz de Itens permitem escolher o modo de análise (`Identificação semântica` ou `ID exata`) para manter consistência com os gráficos.
+Observação 5: o Painel Compras recebeu fluxo de filtros em duas linhas: (1) Ano + Número Compra + Modalidade (opcional) + Ordenação + botões Aplicar/Limpar; (2) campo Compra com busca textual e select filtrado.
 
 ## Estrutura
 
